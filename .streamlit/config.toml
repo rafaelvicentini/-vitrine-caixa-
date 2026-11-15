@@ -1,9 +1,17 @@
 [theme]
-primaryColor = "#0f766e"
-backgroundColor = "#f8fafc"
-secondaryBackgroundColor = "#e6f4f1"
-textColor = "#0f172a"
 base = "light"
+primaryColor = "#9b1fe8"
+backgroundColor = "#f6f5fa"
+secondaryBackgroundColor = "#f1ecfb"
+textColor = "#1f1534"
+borderColor = "#e6e0f0"
+baseRadius = "12px"
+font = "Poppins:https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap"
+headingFont = "Poppins:https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap"
+
+[theme.sidebar]
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f6f0ff"
 
 [client]
 toolbarMode = "minimal"

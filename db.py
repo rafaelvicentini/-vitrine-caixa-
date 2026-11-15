@@ -69,7 +69,9 @@ CREATE TABLE IF NOT EXISTS vendas (
     data_hora       TEXT NOT NULL,               -- horário de Cuiabá, ISO 8601
     total_centavos  INTEGER NOT NULL,
     forma_pagamento TEXT NOT NULL DEFAULT '',
-    observacao      TEXT NOT NULL DEFAULT ''
+    observacao      TEXT NOT NULL DEFAULT '',
+    cliente         TEXT NOT NULL DEFAULT '',    -- nome do cliente (opcional)
+    pago            INTEGER NOT NULL DEFAULT 1   -- 0 = fiado ainda não recebido
 );
 CREATE INDEX IF NOT EXISTS idx_vendas_loja_data ON vendas(loja_id, data_hora);
 
@@ -174,6 +176,24 @@ def conectar(caminho: str | None = None):
 def iniciar_banco(caminho: str | None = None) -> None:
     with conectar(caminho) as con:
         con.executescript(ESQUEMA)
+        _migrar(con)
+
+
+# Colunas acrescentadas depois da 1ª versão. Bancos antigos recebem as colunas com valor padrão
+# (ALTER TABLE ... ADD COLUMN), sem perder dados. Rodar de novo não muda nada (idempotente).
+MIGRACOES = [
+    ("vendas", "cliente", "TEXT NOT NULL DEFAULT ''", None),
+    ("vendas", "pago", "INTEGER NOT NULL DEFAULT 1", "UPDATE vendas SET pago = 0 WHERE forma_pagamento = 'Fiado'"),
+]
+
+
+def _migrar(con) -> None:
+    for tabela, coluna, tipo, depois in MIGRACOES:
+        existentes = {r["name"] for r in con.execute(f"PRAGMA table_info({tabela})")}
+        if coluna not in existentes:
+            con.execute(f"ALTER TABLE {tabela} ADD COLUMN {coluna} {tipo}")
+            if depois:
+                con.execute(depois)
 
 
 # --------------------------------------------------------------------------
@@ -414,9 +434,14 @@ def produtos_estoque_baixo(loja_id: int, caminho=None) -> list[dict]:
 # --------------------------------------------------------------------------
 # Vendas
 # --------------------------------------------------------------------------
+FORMAS_PAGAMENTO = ["Dinheiro", "Pix", "Cartão de débito", "Cartão de crédito", "Fiado", "Outro"]
+FORMAS_A_PRAZO = {"Fiado"}  # vendas nessas formas começam como "a receber"
+
+
 def registrar_venda(loja_id: int, itens: dict[int, int], forma_pagamento: str = "", observacao: str = "",
-                    caminho=None) -> int:
-    """itens = {produto_id: quantidade}. Baixa o estoque numa única transação."""
+                    caminho=None, cliente: str = "") -> int:
+    """itens = {produto_id: quantidade}. Baixa o estoque numa única transação.
+    Venda "Fiado" fica como a receber (pago = 0) até ser marcada como paga."""
     itens = {int(k): int(v) for k, v in itens.items() if int(v) > 0}
     if not itens:
         raise ErroValidacao("Adicione pelo menos um produto à venda.")
@@ -438,8 +463,10 @@ def registrar_venda(loja_id: int, itens: dict[int, int], forma_pagamento: str = 
         total = sum(prods[pid]["preco_centavos"] * q for pid, q in itens.items())
         t = agora()
         venda_id = con.execute(
-            "INSERT INTO vendas (loja_id, data_hora, total_centavos, forma_pagamento, observacao) VALUES (?, ?, ?, ?, ?)",
-            (loja_id, t, total, forma_pagamento or "", (observacao or "").strip()),
+            """INSERT INTO vendas (loja_id, data_hora, total_centavos, forma_pagamento, observacao, cliente, pago)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (loja_id, t, total, forma_pagamento or "", (observacao or "").strip(), (cliente or "").strip()[:60],
+             0 if forma_pagamento in FORMAS_A_PRAZO else 1),
         ).lastrowid
         for pid, qtd in itens.items():
             p = prods[pid]
@@ -476,6 +503,19 @@ def cancelar_venda(loja_id: int, venda_id: int, caminho=None) -> None:
         con.execute("DELETE FROM vendas WHERE id = ? AND loja_id = ?", (venda_id, loja_id))
 
 
+def marcar_venda_paga(loja_id: int, venda_id: int, pago: bool = True, caminho=None) -> None:
+    """Marca uma venda fiado como recebida (ou volta para a receber)."""
+    with conectar(caminho) as con:
+        cur = con.execute("UPDATE vendas SET pago = ? WHERE id = ? AND loja_id = ?", (int(bool(pago)), venda_id, loja_id))
+        if cur.rowcount != 1:
+            raise ErroValidacao("Venda não encontrada.")
+
+
+def status_venda(venda: dict) -> str:
+    """'PAGO' ou 'A RECEBER' (fiado ainda não pago)."""
+    return "PAGO" if venda.get("pago", 1) else "A RECEBER"
+
+
 def _intervalo(inicio: date, fim_exclusivo: date) -> tuple[str, str]:
     return inicio.isoformat() + " 00:00:00", fim_exclusivo.isoformat() + " 00:00:00"
 
@@ -497,7 +537,9 @@ def resumo_periodo(loja_id: int, inicio: date, fim_exclusivo: date, caminho=None
     a, b = _intervalo(inicio, fim_exclusivo)
     with conectar(caminho) as con:
         tot = con.execute(
-            "SELECT COUNT(*) AS n, COALESCE(SUM(total_centavos), 0) AS total FROM vendas WHERE loja_id = ? AND data_hora >= ? AND data_hora < ?",
+            """SELECT COUNT(*) AS n, COALESCE(SUM(total_centavos), 0) AS total,
+                      COALESCE(SUM(CASE WHEN pago = 1 THEN total_centavos ELSE 0 END), 0) AS recebido
+               FROM vendas WHERE loja_id = ? AND data_hora >= ? AND data_hora < ?""",
             (loja_id, a, b)).fetchone()
         itens = con.execute(
             """SELECT COALESCE(SUM(i.quantidade), 0) FROM itens_venda i JOIN vendas v ON v.id = i.venda_id
@@ -517,9 +559,21 @@ def resumo_periodo(loja_id: int, inicio: date, fim_exclusivo: date, caminho=None
             """SELECT substr(data_hora, 12, 2) AS hora, SUM(total_centavos) AS total_centavos
                FROM vendas WHERE loja_id = ? AND data_hora >= ? AND data_hora < ?
                GROUP BY hora ORDER BY hora""", (loja_id, a, b))]
+        por_categoria = [dict(r) for r in con.execute(
+            """SELECT COALESCE(NULLIF(TRIM(p.categoria), ''), 'Sem categoria') AS grupo,
+                      SUM(i.quantidade * i.preco_unit_centavos) AS total_centavos
+               FROM itens_venda i JOIN vendas v ON v.id = i.venda_id LEFT JOIN produtos p ON p.id = i.produto_id
+               WHERE v.loja_id = ? AND v.data_hora >= ? AND v.data_hora < ?
+               GROUP BY grupo ORDER BY total_centavos DESC, grupo""", (loja_id, a, b))]
+        por_forma = [dict(r) for r in con.execute(
+            """SELECT COALESCE(NULLIF(forma_pagamento, ''), 'Não informado') AS grupo, SUM(total_centavos) AS total_centavos
+               FROM vendas WHERE loja_id = ? AND data_hora >= ? AND data_hora < ?
+               GROUP BY grupo ORDER BY total_centavos DESC, grupo""", (loja_id, a, b))]
     n, total = tot["n"], tot["total"]
     return {"n_vendas": n, "total_centavos": total, "ticket_medio_centavos": round(total / n) if n else 0, "n_itens": itens,
-            "mais_vendidos": mais, "por_dia": por_dia, "por_hora": por_hora}
+            "recebido_centavos": tot["recebido"], "a_receber_centavos": total - tot["recebido"],
+            "mais_vendidos": mais, "por_dia": por_dia, "por_hora": por_hora,
+            "por_categoria": por_categoria, "por_forma": por_forma}
 
 
 # --------------------------------------------------------------------------
@@ -532,7 +586,9 @@ def dados_backup(loja_id: int, caminho=None) -> dict[str, list[dict]]:
             "produtos": q("""SELECT id, nome, categoria, preco_centavos/100.0 AS preco, estoque, estoque_minimo,
                                     na_vitrine, criado_em, atualizado_em FROM produtos WHERE loja_id = ? AND ativo = 1
                              ORDER BY nome COLLATE NOCASE"""),
-            "vendas": q("""SELECT v.id AS venda_id, v.data_hora, v.forma_pagamento, i.nome_produto AS produto,
+            "vendas": q("""SELECT v.id AS venda_id, v.data_hora, v.forma_pagamento, v.cliente,
+                                  CASE WHEN v.pago = 1 THEN 'pago' ELSE 'a receber' END AS situacao,
+                                  i.nome_produto AS produto,
                                   i.quantidade, i.preco_unit_centavos/100.0 AS preco_unit,
                                   i.quantidade*i.preco_unit_centavos/100.0 AS subtotal, v.total_centavos/100.0 AS total_venda,
                                   v.observacao

@@ -10,13 +10,20 @@ no **Projeto de Extensão III**, para os empreendedores da **Associação Comuni
 | Tela | O que faz |
 |---|---|
 | **Entrar / Criar minha loja** | Cada empreendedor cria a sua loja com um **PIN de 4 números**. O PIN é guardado só como hash (PBKDF2‑SHA256 com sal). Cada loja vê apenas os próprios dados. |
-| **🛍️ Vitrine (caixa)** | Catálogo com foto, preço e estoque. Escolhe as quantidades, **registra a venda** (baixa o estoque automaticamente) ou envia o resumo pelo WhatsApp. Mostra **alerta de estoque baixo**. |
-| **📦 Produtos** | Cadastrar, **editar**, **repor estoque** e **excluir** produtos (nome, categoria, preço, estoque, alerta de estoque mínimo, foto opcional, mostrar ou não na vitrine). |
-| **📊 Relatórios** | **Dia** ou **mês**: total vendido, nº de vendas, ticket médio, itens, **mais vendidos** e gráfico (por hora ou por dia). Lista as vendas e permite **cancelar** uma venda (o estoque volta). |
-| **⚙️ Ajustes** | Nome do negócio, **WhatsApp** que recebe pedidos, estoque mínimo padrão, **link público da vitrine**, **backup em CSV** (produtos, vendas, movimentos de estoque) e troca de PIN. |
+| **Vendas** (painel inicial) | Abas **DIA / MÊS** com seletor de datas em “chips”, cartões de **faturamento bruto, recebido, a receber (fiado) e ticket médio**, lista de vendas com cliente e etiquetas coloridas (forma de pagamento e **PAGO / A RECEBER**), menu ⋮ para **marcar fiado como pago** ou **cancelar** a venda (o estoque volta), **mais vendidos**, gráfico por hora/dia e **gráficos de rosca** por produto, categoria e forma de pagamento. Botão flutuante **+ NOVA VENDA**. |
+| **Nova venda (caixa)** | Catálogo com foto, preço e estoque. Escolhe as quantidades, informa cliente (opcional) e forma de pagamento, **registra a venda** (baixa o estoque automaticamente) ou envia o resumo pelo WhatsApp. Mostra **alerta de estoque baixo**. |
+| **Estoque e cadastros** | Cadastrar, **editar**, **repor estoque** e **excluir** produtos (nome, categoria, preço, estoque, alerta de estoque mínimo, foto opcional, mostrar ou não na vitrine), com resumo do estoque. |
+| **Opções** | Nome do negócio, **WhatsApp** que recebe pedidos, estoque mínimo padrão, **link público da vitrine**, **backup em CSV** (produtos, vendas, movimentos de estoque) e troca de PIN. |
 | **Vitrine do cliente** (`?loja=codigo`) | Link que o empreendedor manda aos clientes: eles montam o pedido e enviam para o WhatsApp da loja (`wa.me`). Não precisa de PIN. |
 | **★ Avaliar** (`?pagina=avaliar`) | Questionário de validação (as mesmas 16 perguntas do questionário impresso). Não precisa de PIN; as respostas são gravadas no SQLite. |
 | **📋 Pesquisador** | Resumo das avaliações (nº de respostas, médias de facilidade e utilidade, contagem de cada resposta, tarefas, comentários) e **exportação CSV**. Protegido pela senha `ADMIN_SENHA`. |
+
+## Visual
+
+Interface no estilo painel: fundo claro, **barra lateral** com logo e menu (Vendas, Nova venda, Estoque e cadastros,
+Opções, Avaliar, Sair), cor principal **roxo/magenta** (`#9b1fe8` / `#c026d3`) com botões de destaque **verdes**, cartões
+brancos arredondados com sombra suave e fonte **Poppins**. No celular a barra lateral dá lugar a um menu de ícones no topo.
+Gráficos feitos com **Plotly**.
 
 ## Estrutura
 
@@ -25,11 +32,14 @@ app.py              interface (Streamlit)
 db.py               banco de dados (sqlite3) e regras de negócio
 tests/test_db.py    testes automáticos (pytest)
 requirements.txt    dependências
-.streamlit/config.toml               tema (cores) e configurações
+.streamlit/config.toml               tema (cores roxo/magenta, fonte Poppins) e configurações
 .streamlit/secrets.toml.example      modelo da senha do painel do pesquisador
 ```
 
 Tabelas do SQLite: `lojas`, `produtos`, `vendas`, `itens_venda`, `movimentos_estoque`, `avaliacoes`.
+Na versão 2 a tabela `vendas` ganhou as colunas `cliente` (texto, padrão vazio) e `pago` (1 = pago, 0 = fiado a receber).
+Bancos criados pela versão 1 são atualizados sozinhos ao abrir o app (`ALTER TABLE ... ADD COLUMN`, sem perder dados;
+vendas antigas em “Fiado” ficam como a receber).
 Valores em dinheiro são guardados em **centavos** (inteiros); todas as consultas usam **parâmetros** (`?`),
 o que evita injeção de SQL; cada venda é gravada numa **transação** (venda, itens e baixa de estoque juntos).
 O arquivo `vitrine_caixa.db` é criado sozinho na primeira execução.
@@ -68,7 +78,7 @@ Testes automáticos: `pip install pytest` e `python -m pytest -q`.
 6. Links para divulgar:
    - app para os empreendedores: `https://SEU-APP.streamlit.app`
    - questionário de avaliação: `https://SEU-APP.streamlit.app/?pagina=avaliar`
-   - vitrine de cada loja: aparece em **⚙️ Ajustes** de cada loja.
+   - vitrine de cada loja: aparece em **Opções** de cada loja.
 
 ### Atenção: onde ficam os dados
 
@@ -77,7 +87,7 @@ reiniciado, atualizado (novo commit) ou “acorda” depois de dias sem uso, o b
 Por isso:
 
 - **Depois de cada sessão de teste, baixe o CSV das avaliações** no Painel do pesquisador.
-- Oriente os empreendedores a usar **⚙️ Ajustes → Backup (CSV)** com frequência.
+- Oriente os empreendedores a usar **Opções → Backup (CSV)** com frequência.
 - Para uso definitivo, o próximo passo é trocar o SQLite por um banco hospedado (ex.: PostgreSQL),
   mudando só o `db.py`.
 
