@@ -1,0 +1,10 @@
+# banco de dados local (cada instalação cria o seu na primeira execução)
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+# segredos
+.streamlit/secrets.toml
+__pycache__/
+.pytest_cache/
+.venv/
