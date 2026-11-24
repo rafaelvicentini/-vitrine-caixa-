@@ -97,3 +97,5 @@ Por isso:
 - O PIN nunca é guardado em texto; só o hash.
 - Os dados de cada loja só aparecem para quem tem o PIN, exceto a vitrine pública (produtos marcados
   como “Mostrar na vitrine”).
+
+Licença: MIT (veja LICENSE)
